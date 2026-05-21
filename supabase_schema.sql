@@ -99,3 +99,27 @@ BEGIN
   WHERE id = product_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 6. Table des Paiements (Suivi et Réconciliation)
+CREATE TABLE public.payments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  tx_ref TEXT UNIQUE NOT NULL,
+  transaction_id TEXT, -- ID de transaction Flutterwave
+  amount NUMERIC NOT NULL,
+  currency TEXT DEFAULT 'XOF',
+  plan_id TEXT NOT NULL,
+  status TEXT DEFAULT 'pending', -- pending, success, failed, pending_verification
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Activer RLS pour les paiements
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Les marchands voient leurs propres paiements" ON public.payments FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Les marchands insèrent leurs propres paiements" ON public.payments FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Les marchands mettent à jour leurs paiements" ON public.payments FOR UPDATE USING (auth.uid() = user_id);
+
+-- Activer le temps réel pour les paiements dans Supabase
+ALTER PUBLICATION supabase_realtime ADD TABLE public.payments;

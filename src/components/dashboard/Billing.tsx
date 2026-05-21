@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useFlutterwave, closePaymentModal } from 'flutterwave-react-v3';
-import { CreditCard, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { CreditCard, CheckCircle2, AlertCircle, Loader2, History, RefreshCw, XCircle, Check } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface BillingProps {
@@ -15,27 +15,32 @@ const PLANS = [
   { id: 'pro', name: 'Pro', price: 10000, description: 'Pour les boutiques avec du volume.' }
 ];
 
-// ─── Sous-composant: affiche un plan et gère son paiement ────────────────────
-// useFlutterwave DOIT être appelé au niveau du composant (règle des hooks React)
-function PlanCard({
-  plan,
-  isCurrentPlan,
-  user,
-  storeName,
-  onSuccess,
-}: {
-  key?: any;
+interface PlanCardProps {
   plan: typeof PLANS[0];
   isCurrentPlan: boolean;
   user: User;
   storeName: string;
   onSuccess: (planId: string, newValidUntil: Date) => void;
-}) {
+}
+
+const PlanCard: React.FC<PlanCardProps> = ({
+  plan,
+  isCurrentPlan,
+  user,
+  storeName,
+  onSuccess,
+}) => {
   const [processing, setProcessing] = useState(false);
+  const [txRef, setTxRef] = useState(`txn_${Date.now()}_${user.id}`);
+
+  // Re-générer un tx_ref à chaque fois que la transaction se termine
+  const resetTxRef = () => {
+    setTxRef(`txn_${Date.now()}_${user.id}`);
+  };
 
   const config = {
     public_key: import.meta.env.VITE_FLUTTERWAVE_PUBLIC_KEY || 'FLWPUBK_TEST-SANDBOXDEMOKEY-X',
-    tx_ref: `txn_${Date.now()}_${user.id}`,
+    tx_ref: txRef,
     amount: plan.price,
     currency: 'XOF',
     payment_options: 'card,mobilemoneyfranco',
@@ -51,58 +56,97 @@ function PlanCard({
     },
   };
 
-  // ✅ Hook appelé au niveau du composant — conforme aux règles React
   const handleFlutterwavePayment = useFlutterwave(config);
 
-  const handlePay = () => {
+  const handlePay = async () => {
     setProcessing(true);
+    
+    // 1. Résilience : Pré-enregistrer le paiement comme initié ('pending')
+    try {
+      await supabase.from('payments').insert({
+        user_id: user.id,
+        tx_ref: txRef,
+        amount: plan.price,
+        plan_id: plan.id,
+        status: 'pending'
+      });
+    } catch (err) {
+      console.error("Erreur lors du pré-enregistrement du paiement:", err);
+    }
+
     handleFlutterwavePayment({
-      callback: async (response) => {
-        if (response.status === 'successful') {
-          toast.success('Paiement validé !');
+      callback: async (response: any) => {
+        if (response.status === 'successful' || response.status === 'completed') {
+          toast.loading('Validation sécurisée du paiement...');
           try {
-            const { data: currentUser } = await supabase
-              .from('users')
-              .select('subscription_valid_until')
-              .eq('id', user.id)
-              .single();
-
-            const daysToAdd = 30;
-            const now = new Date();
-            let newValidUntil: Date;
-
-            if (currentUser?.subscription_valid_until) {
-              const existing = new Date(currentUser.subscription_valid_until);
-              newValidUntil = existing > now
-                ? new Date(existing.getTime() + daysToAdd * 86400000)
-                : new Date(now.getTime() + daysToAdd * 86400000);
-            } else {
-              newValidUntil = new Date(now.getTime() + daysToAdd * 86400000);
+            // Détecter l'URL du service de validation
+            let verifyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-payment`;
+            if (import.meta.env.VITE_API_URL) {
+              verifyUrl = `${import.meta.env.VITE_API_URL}/api/verify-payment`;
+            } else if (window.location.hostname === 'localhost') {
+              verifyUrl = 'http://localhost:3000/api/verify-payment';
             }
 
-            const { error } = await supabase
-              .from('users')
-              .update({
-                subscription_plan: plan.id,
-                subscription_valid_until: newValidUntil.toISOString(),
+            const res = await fetch(verifyUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                transaction_id: response.transaction_id || response.id,
+                tx_ref: txRef,
+                plan_id: plan.id,
+                user_id: user.id
               })
-              .eq('id', user.id);
+            });
 
-            if (error) throw error;
-
-            onSuccess(plan.id, newValidUntil);
-            toast.success('Abonnement prolongé de 30 jours !');
-          } catch (err) {
-            console.error(err);
-            toast.error("Erreur lors de la mise à jour de l'abonnement.");
+            const result = await res.json();
+            if (res.ok && result.success) {
+              toast.dismiss();
+              toast.success(`Félicitations ! Votre forfait ${plan.name} est activé.`);
+              onSuccess(plan.id, new Date(result.newValidUntil));
+            } else {
+              throw new Error(result.message || 'La vérification a échoué');
+            }
+          } catch (err: any) {
+            toast.dismiss();
+            console.error("Erreur validation paiement:", err);
+            toast.error(err.message || 'Erreur lors de la validation du paiement.');
+            
+            // Réconciliation / Plan B : Marquer en 'pending_verification' pour vérification manuelle ultérieure
+            try {
+              await supabase.from('payments').upsert({
+                user_id: user.id,
+                tx_ref: txRef,
+                transaction_id: (response.transaction_id || response.id)?.toString(),
+                amount: plan.price,
+                plan_id: plan.id,
+                status: 'pending_verification',
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'tx_ref' });
+              
+              toast.info('Votre transaction a été enregistrée pour une réconciliation manuelle.');
+            } catch (dbErr) {
+              console.error(dbErr);
+            }
+            onSuccess(plan.id, new Date());
           }
         } else {
-          toast.error("Le paiement n'a pas abouti.");
+          toast.error("Paiement non finalisé.");
+          try {
+            await supabase.from('payments').update({ status: 'failed' }).eq('tx_ref', txRef);
+          } catch (dbErr) {
+            console.error(dbErr);
+          }
         }
         closePaymentModal();
         setProcessing(false);
+        resetTxRef();
       },
-      onClose: () => setProcessing(false),
+      onClose: () => {
+        setProcessing(false);
+        resetTxRef();
+      },
     });
   };
 
@@ -141,6 +185,75 @@ function PlanCard({
 // ─── Composant principal ─────────────────────────────────────────────────────
 export function Billing({ user }: BillingProps) {
   const { storeData, refreshStoreData } = useAuth();
+  const [payments, setPayments] = useState<any[]>([]);
+  const [loadingPayments, setLoadingPayments] = useState(true);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+
+  const fetchPayments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setPayments(data || []);
+    } catch (err) {
+      console.error("Erreur lors de la récupération des paiements:", err);
+    } finally {
+      setLoadingPayments(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPayments();
+  }, [user.id]);
+
+  const handleVerifyPayment = async (payment: any) => {
+    if (!payment.transaction_id) {
+      toast.error("Impossible de vérifier : ID de transaction manquant.");
+      return;
+    }
+
+    setVerifyingId(payment.id);
+    toast.loading('Vérification du paiement auprès de Flutterwave...');
+
+    try {
+      let verifyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-payment`;
+      if (import.meta.env.VITE_API_URL) {
+        verifyUrl = `${import.meta.env.VITE_API_URL}/api/verify-payment`;
+      } else if (window.location.hostname === 'localhost') {
+        verifyUrl = 'http://localhost:3000/api/verify-payment';
+      }
+
+      const res = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          transaction_id: payment.transaction_id,
+          tx_ref: payment.tx_ref,
+          plan_id: payment.plan_id,
+          user_id: user.id
+        })
+      });
+
+      const result = await res.json();
+      if (res.ok && result.success) {
+        toast.dismiss();
+        toast.success("Paiement validé avec succès ! Abonnement prolongé.");
+        refreshStoreData();
+        fetchPayments();
+      } else {
+        throw new Error(result.message || 'Le paiement n\'a pas pu être validé.');
+      }
+    } catch (err: any) {
+      toast.dismiss();
+      toast.error(err.message || 'Erreur lors de la vérification.');
+    } finally {
+      setVerifyingId(null);
+    }
+  };
 
   const getStatus = () => {
     if (!storeData?.subscription_plan || storeData.subscription_plan === 'free') {
@@ -163,8 +276,8 @@ export function Billing({ user }: BillingProps) {
   const status = getStatus();
 
   const handlePaymentSuccess = (planId: string, newValidUntil: Date) => {
-    // Rafraîchit les données du marchand après un paiement réussi
     refreshStoreData();
+    fetchPayments();
   };
 
   return (
@@ -177,7 +290,7 @@ export function Billing({ user }: BillingProps) {
       <div className={`p-6 border flex flex-col md:flex-row items-center gap-6 justify-between ${
         status.type === 'success' ? 'glass border-green-200' :
         status.type === 'warning' ? 'glass border-yellow-200' :
-        'bg-red-50 border-red-200'
+        'bg-red-50/50 border-red-200'
       }`}>
         <div className="flex items-center gap-4">
           {status.type === 'success'
@@ -199,6 +312,7 @@ export function Billing({ user }: BillingProps) {
         </div>
       </div>
 
+      {/* Plans List */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         {PLANS.map(plan => (
           <PlanCard
@@ -210,6 +324,97 @@ export function Billing({ user }: BillingProps) {
             onSuccess={handlePaymentSuccess}
           />
         ))}
+      </div>
+
+      {/* Payment History and Reconciliation Section */}
+      <div className="border-t border-art-border pt-10">
+        <div className="flex items-center gap-2 mb-6">
+          <History className="w-5 h-5 text-art-text" />
+          <h2 className="text-2xl font-serif italic text-art-text">Historique des transactions</h2>
+        </div>
+
+        {loadingPayments ? (
+          <div className="flex items-center gap-2 text-xs font-mono text-art-muted">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Chargement de l'historique...
+          </div>
+        ) : payments.length === 0 ? (
+          <p className="text-xs font-mono text-art-muted uppercase tracking-widest">Aucune transaction trouvée.</p>
+        ) : (
+          <div className="glass-surface border border-art-border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-mono text-xs">
+                <thead>
+                  <tr className="border-b border-art-border bg-art-text/5 text-art-text uppercase font-bold tracking-widest text-[10px]">
+                    <th className="p-4">Date</th>
+                    <th className="p-4">Référence (TxRef)</th>
+                    <th className="p-4">Forfait</th>
+                    <th className="p-4">Montant</th>
+                    <th className="p-4">Statut</th>
+                    <th className="p-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-art-border/50">
+                  {payments.map((payment) => (
+                    <tr key={payment.id} className="hover:bg-art-text/5 transition-colors">
+                      <td className="p-4 whitespace-nowrap text-art-muted">
+                        {new Date(payment.created_at).toLocaleDateString('fr-FR', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </td>
+                      <td className="p-4 font-bold">{payment.tx_ref}</td>
+                      <td className="p-4 uppercase">
+                        {payment.plan_id === 'pro' ? 'Pro' : 'Essentiel'}
+                      </td>
+                      <td className="p-4 font-bold">
+                        {payment.amount.toLocaleString()} {payment.currency || 'XOF'}
+                      </td>
+                      <td className="p-4">
+                        {payment.status === 'success' && (
+                          <span className="inline-flex items-center gap-1 text-green-600 font-bold">
+                            <Check className="w-3.5 h-3.5" /> Validé
+                          </span>
+                        )}
+                        {payment.status === 'pending_verification' && (
+                          <span className="inline-flex items-center gap-1 text-yellow-600 font-bold animate-pulse">
+                            <AlertCircle className="w-3.5 h-3.5" /> En attente de validation
+                          </span>
+                        )}
+                        {payment.status === 'pending' && (
+                          <span className="inline-flex items-center gap-1 text-art-muted font-bold">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Initié
+                          </span>
+                        )}
+                        {payment.status === 'failed' && (
+                          <span className="inline-flex items-center gap-1 text-red-600 font-bold">
+                            <XCircle className="w-3.5 h-3.5" /> Échoué
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right">
+                        {payment.status === 'pending_verification' && (
+                          <button
+                            onClick={() => handleVerifyPayment(payment)}
+                            disabled={verifyingId === payment.id}
+                            className="inline-flex items-center gap-1 px-3 py-1 bg-art-text text-white text-[10px] uppercase font-bold tracking-widest active:scale-95 transition-transform disabled:opacity-50"
+                          >
+                            {verifyingId === payment.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <RefreshCw className="w-3 h-3" />
+                            )}
+                            Vérifier
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

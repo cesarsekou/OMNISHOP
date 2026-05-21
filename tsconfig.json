@@ -25,5 +25,11 @@
       "vite/client"
     ],
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "api",
+    "supabase"
+  ]
 }
