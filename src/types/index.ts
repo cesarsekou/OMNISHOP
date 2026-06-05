@@ -3,10 +3,12 @@ export interface Product {
   name: string;
   price: number;
   description: string;
-  imageUrl?: string;
+  imageUrl?: string; // Frontend property mapped from 'image'
+  image?: string;    // Database property alias
   category?: string;
-  stock: number;
-  createdAt: any;
+  stock: number;      // Frontend property mapped from 'stock_count'
+  stock_count?: number; // Database property alias
+  createdAt?: string;
 }
 
 export interface StoreData {

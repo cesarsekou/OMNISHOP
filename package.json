@@ -1,10 +1,11 @@
 {
-  "name": "react-example",
+  "name": "omnishop-saas",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "whatsapp-worker": "tsx scripts/whatsapp-worker.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -22,18 +23,20 @@
     "flutterwave-react-v3": "^1.3.3",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-helmet-async": "^3.0.0",
     "react-router-dom": "^7.15.0",
     "recharts": "^3.8.1",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^3.6.0",
-    "vite": "^6.2.3"
+    "stripe": "^22.2.0",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/qrcode": "^1.5.6",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",

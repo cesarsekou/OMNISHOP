@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { Package, ShoppingCart, Settings, LogOut, Loader2, Search, BarChart, CreditCard } from 'lucide-react';
+import { Package, ShoppingCart, Settings, LogOut, Loader2, Search, BarChart, CreditCard, MessageSquare, QrCode } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { toast } from 'sonner';
 import imageCompression from 'browser-image-compression';
@@ -15,10 +15,13 @@ import { Orders } from '../components/dashboard/Orders';
 import { Stats } from '../components/dashboard/Stats';
 import { StoreSettings } from '../components/dashboard/StoreSettings';
 import { Billing } from '../components/dashboard/Billing';
+import { WhatsAppIntegration } from '../components/dashboard/WhatsAppIntegration';
+import { QrCodeGenerator } from '../components/dashboard/QrCodeGenerator';
 import { Product } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
 import { OnboardingWizard } from '../components/dashboard/OnboardingWizard';
 import { COUNTRIES } from '../data/countries';
+import { useWhatsAppQueue } from '../hooks/useWhatsAppQueue';
 
 export default function Dashboard() {
   const { storeData, refreshStoreData } = useAuth();
@@ -26,6 +29,9 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+
+  // Background WhatsApp queue processor
+  useWhatsAppQueue(user?.id);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -103,6 +109,8 @@ export default function Dashboard() {
                 </div>
               : <Billing user={user} />
           } />
+          <Route path="/whatsapp" element={<WhatsAppIntegration user={user} />} />
+          <Route path="/qrcode" element={<QrCodeGenerator user={user} />} />
           <Route path="/settings" element={<StoreSettings user={user} />} />
         </Routes>
       </main>
@@ -125,6 +133,8 @@ function Sidebar() {
     { name: 'Produits',     path: '/dashboard',          icon: Package },
     { name: 'Commandes',    path: '/dashboard/orders',   icon: ShoppingCart },
     { name: 'Statistiques', path: '/dashboard/stats',    icon: BarChart },
+    { name: 'WhatsApp',     path: '/dashboard/whatsapp', icon: MessageSquare },
+    { name: 'Code QR',      path: '/dashboard/qrcode',   icon: QrCode },
     { name: 'Abonnement',   path: '/dashboard/billing',  icon: CreditCard },
     { name: 'Paramètres',   path: '/dashboard/settings', icon: Settings },
   ];
@@ -302,6 +312,16 @@ function Products({ user }: { user: User }) {
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Supprimer ce produit ?')) return;
+    
+    // Nettoyer l'image du produit dans le stockage Supabase si elle existe
+    const productToDelete = products.find(p => p.id === id);
+    if (productToDelete?.imageUrl && productToDelete.imageUrl.includes('/storage/v1/object/public/products/')) {
+      const imagePath = productToDelete.imageUrl.split('/storage/v1/object/public/products/')[1];
+      if (imagePath) {
+        await supabase.storage.from('products').remove([decodeURIComponent(imagePath)]);
+      }
+    }
+    
     await supabase.from('products').delete().eq('id', id);
     setProducts(products.filter(p => p.id !== id));
     toast.success('Produit supprimé');

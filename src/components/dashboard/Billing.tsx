@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { useFlutterwave, closePaymentModal } from 'flutterwave-react-v3';
+import { useSearchParams } from 'react-router-dom';
 import { CreditCard, CheckCircle2, AlertCircle, Loader2, History, RefreshCw, XCircle, Check } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -19,135 +19,26 @@ interface PlanCardProps {
   plan: typeof PLANS[0];
   isCurrentPlan: boolean;
   user: User;
-  storeName: string;
-  onSuccess: (planId: string, newValidUntil: Date) => void;
+  onPayInit: (planId: string) => Promise<void>;
 }
 
 const PlanCard: React.FC<PlanCardProps> = ({
   plan,
   isCurrentPlan,
-  user,
-  storeName,
-  onSuccess,
+  onPayInit,
 }) => {
   const [processing, setProcessing] = useState(false);
-  const [txRef, setTxRef] = useState(`txn_${Date.now()}_${user.id}`);
-
-  // Re-générer un tx_ref à chaque fois que la transaction se termine
-  const resetTxRef = () => {
-    setTxRef(`txn_${Date.now()}_${user.id}`);
-  };
-
-  const config = {
-    public_key: import.meta.env.VITE_FLUTTERWAVE_PUBLIC_KEY || 'FLWPUBK_TEST-SANDBOXDEMOKEY-X',
-    tx_ref: txRef,
-    amount: plan.price,
-    currency: 'XOF',
-    payment_options: 'card,mobilemoneyfranco',
-    customer: {
-      email: user.email || 'marchand@omnishop.com',
-      phone_number: '',
-      name: storeName || 'Marchand OmniShop',
-    },
-    customizations: {
-      title: `Abonnement ${plan.name}`,
-      description: 'Renouvellement 30 jours',
-      logo: 'https://st2.depositphotos.com/4403291/7418/v/450/depositphotos_74189661-stock-illustration-online-shop-log.jpg',
-    },
-  };
-
-  const handleFlutterwavePayment = useFlutterwave(config);
 
   const handlePay = async () => {
     setProcessing(true);
-    
-    // 1. Résilience : Pré-enregistrer le paiement comme initié ('pending')
     try {
-      await supabase.from('payments').insert({
-        user_id: user.id,
-        tx_ref: txRef,
-        amount: plan.price,
-        plan_id: plan.id,
-        status: 'pending'
-      });
-    } catch (err) {
-      console.error("Erreur lors du pré-enregistrement du paiement:", err);
+      await onPayInit(plan.id);
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Erreur lors de la redirection vers Stripe.');
+    } finally {
+      setProcessing(false);
     }
-
-    handleFlutterwavePayment({
-      callback: async (response: any) => {
-        if (response.status === 'successful' || response.status === 'completed') {
-          toast.loading('Validation sécurisée du paiement...');
-          try {
-            // Détecter l'URL du service de validation
-            let verifyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-payment`;
-            if (import.meta.env.VITE_API_URL) {
-              verifyUrl = `${import.meta.env.VITE_API_URL}/api/verify-payment`;
-            } else if (window.location.hostname === 'localhost') {
-              verifyUrl = 'http://localhost:3000/api/verify-payment';
-            }
-
-            const res = await fetch(verifyUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                transaction_id: response.transaction_id || response.id,
-                tx_ref: txRef,
-                plan_id: plan.id,
-                user_id: user.id
-              })
-            });
-
-            const result = await res.json();
-            if (res.ok && result.success) {
-              toast.dismiss();
-              toast.success(`Félicitations ! Votre forfait ${plan.name} est activé.`);
-              onSuccess(plan.id, new Date(result.newValidUntil));
-            } else {
-              throw new Error(result.message || 'La vérification a échoué');
-            }
-          } catch (err: any) {
-            toast.dismiss();
-            console.error("Erreur validation paiement:", err);
-            toast.error(err.message || 'Erreur lors de la validation du paiement.');
-            
-            // Réconciliation / Plan B : Marquer en 'pending_verification' pour vérification manuelle ultérieure
-            try {
-              await supabase.from('payments').upsert({
-                user_id: user.id,
-                tx_ref: txRef,
-                transaction_id: (response.transaction_id || response.id)?.toString(),
-                amount: plan.price,
-                plan_id: plan.id,
-                status: 'pending_verification',
-                updated_at: new Date().toISOString()
-              }, { onConflict: 'tx_ref' });
-              
-              toast.info('Votre transaction a été enregistrée pour une réconciliation manuelle.');
-            } catch (dbErr) {
-              console.error(dbErr);
-            }
-            onSuccess(plan.id, new Date());
-          }
-        } else {
-          toast.error("Paiement non finalisé.");
-          try {
-            await supabase.from('payments').update({ status: 'failed' }).eq('tx_ref', txRef);
-          } catch (dbErr) {
-            console.error(dbErr);
-          }
-        }
-        closePaymentModal();
-        setProcessing(false);
-        resetTxRef();
-      },
-      onClose: () => {
-        setProcessing(false);
-        resetTxRef();
-      },
-    });
   };
 
   return (
@@ -161,7 +52,7 @@ const PlanCard: React.FC<PlanCardProps> = ({
         <h3 className="text-2xl font-bold tracking-tight mb-2">{plan.name}</h3>
         <div className="flex items-baseline gap-2 mb-4">
           <span className="text-4xl font-serif italic text-art-text">{plan.price.toLocaleString()}</span>
-          <span className="text-xs text-art-muted font-mono">FCFA / 30 jours</span>
+          <span className="text-xs text-art-muted font-mono">FCFA / mois</span>
         </div>
         <p className="text-xs text-art-muted uppercase tracking-widest leading-relaxed">{plan.description}</p>
       </div>
@@ -169,13 +60,13 @@ const PlanCard: React.FC<PlanCardProps> = ({
         <button
           onClick={handlePay}
           disabled={processing}
-          className="w-full flex items-center justify-center gap-2 bg-art-text text-white py-4 font-bold text-xs uppercase tracking-widest active:scale-[0.99] transition-transform shadow-[4px_4px_0px_rgba(0,0,0,0.1)] hover:translate-y-px hover:shadow-[2px_2px_0px_rgba(0,0,0,0.1)] disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 bg-art-text text-white py-4 font-bold text-xs uppercase tracking-widest active:scale-[0.99] transition-transform shadow-[4px_4px_0px_rgba(0,0,0,0.1)] hover:translate-y-px hover:shadow-[2px_2px_0px_rgba(0,0,0,0.1)] disabled:opacity-50 cursor-pointer"
         >
           {processing ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-4 h-4" />}
           {isCurrentPlan ? 'Renouveler ce forfait' : 'Passer à ce forfait'}
         </button>
         <p className="text-center text-[10px] text-art-muted mt-3 font-mono">
-          Paiement sécurisé par Flutterwave (Mobile Money, Carte)
+          Paiement sécurisé par Stripe (Abonnement par Carte)
         </p>
       </div>
     </div>
@@ -187,7 +78,8 @@ export function Billing({ user }: BillingProps) {
   const { storeData, refreshStoreData } = useAuth();
   const [payments, setPayments] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(true);
-  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const fetchPayments = async () => {
     try {
@@ -208,21 +100,29 @@ export function Billing({ user }: BillingProps) {
     fetchPayments();
   }, [user.id]);
 
-  const handleVerifyPayment = async (payment: any) => {
-    if (!payment.transaction_id) {
-      toast.error("Impossible de vérifier : ID de transaction manquant.");
-      return;
-    }
+  // Handle returns from Stripe Checkout
+  useEffect(() => {
+    const sessionId = searchParams.get('session_id');
+    const statusParam = searchParams.get('status');
 
-    setVerifyingId(payment.id);
-    toast.loading('Vérification du paiement auprès de Flutterwave...');
+    if (sessionId) {
+      verifyStripePayment(sessionId);
+    } else if (statusParam === 'cancelled') {
+      toast.error("Le paiement a été annulé.");
+      // Clean up URL
+      searchParams.delete('status');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams]);
+
+  const verifyStripePayment = async (sessionId: string) => {
+    setVerifying(true);
+    const toastId = toast.loading('Vérification du paiement Stripe...');
 
     try {
-      let verifyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-payment`;
-      if (import.meta.env.VITE_API_URL) {
-        verifyUrl = `${import.meta.env.VITE_API_URL}/api/verify-payment`;
-      } else if (window.location.hostname === 'localhost') {
-        verifyUrl = 'http://localhost:3000/api/verify-payment';
+      let verifyUrl = '/api/verify-stripe-payment';
+      if (window.location.hostname === 'localhost') {
+        verifyUrl = 'http://localhost:3000/api/verify-stripe-payment';
       }
 
       const res = await fetch(verifyUrl, {
@@ -230,28 +130,57 @@ export function Billing({ user }: BillingProps) {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          transaction_id: payment.transaction_id,
-          tx_ref: payment.tx_ref,
-          plan_id: payment.plan_id,
-          user_id: user.id
-        })
+        body: JSON.stringify({ session_id: sessionId })
       });
 
       const result = await res.json();
+      
       if (res.ok && result.success) {
-        toast.dismiss();
-        toast.success("Paiement validé avec succès ! Abonnement prolongé.");
-        refreshStoreData();
-        fetchPayments();
+        toast.success("Félicitations ! Votre forfait est activé.", { id: toastId });
+        await refreshStoreData();
+        await fetchPayments();
       } else {
-        throw new Error(result.message || 'Le paiement n\'a pas pu être validé.');
+        throw new Error(result.message || 'La validation Stripe a échoué');
       }
     } catch (err: any) {
-      toast.dismiss();
-      toast.error(err.message || 'Erreur lors de la vérification.');
+      console.error("Erreur validation Stripe:", err);
+      toast.error(err.message || 'Erreur lors du traitement de votre abonnement.', { id: toastId });
     } finally {
-      setVerifyingId(null);
+      setVerifying(false);
+      // Clean up query parameters from URL
+      searchParams.delete('session_id');
+      setSearchParams(searchParams, { replace: true });
+    }
+  };
+
+  const handlePayInit = async (planId: string) => {
+    let sessionUrl = '/api/create-checkout-session';
+    if (window.location.hostname === 'localhost') {
+      sessionUrl = 'http://localhost:3000/api/create-checkout-session';
+    }
+
+    const response = await fetch(sessionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        planId,
+        userId: user.id,
+        userEmail: user.email,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Impossible de créer la session Stripe Checkout.');
+    }
+
+    // Redirect to Stripe Checkout page
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      throw new Error('URL Stripe Checkout invalide.');
     }
   };
 
@@ -275,42 +204,49 @@ export function Billing({ user }: BillingProps) {
 
   const status = getStatus();
 
-  const handlePaymentSuccess = (planId: string, newValidUntil: Date) => {
-    refreshStoreData();
-    fetchPayments();
-  };
-
   return (
     <div className="max-w-5xl mx-auto space-y-12">
       <header className="flex justify-between items-end border-b border-art-border pb-6">
         <h1 className="text-4xl font-serif italic tracking-tight text-art-text">Abonnement</h1>
       </header>
 
+      {/* Verification Loader Overlay */}
+      {verifying && (
+        <div className="p-6 border bg-art-accent/10 border-art-accent animate-pulse flex items-center justify-center gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-art-accent" />
+          <span className="text-sm font-mono uppercase tracking-widest font-bold text-art-text">
+            Finalisation de l'abonnement en cours...
+          </span>
+        </div>
+      )}
+
       {/* Status Card */}
-      <div className={`p-6 border flex flex-col md:flex-row items-center gap-6 justify-between ${
-        status.type === 'success' ? 'glass border-green-200' :
-        status.type === 'warning' ? 'glass border-yellow-200' :
-        'bg-red-50/50 border-red-200'
-      }`}>
-        <div className="flex items-center gap-4">
-          {status.type === 'success'
-            ? <CheckCircle2 className="w-8 h-8 text-green-500" />
-            : <AlertCircle className={`w-8 h-8 ${status.type === 'warning' ? 'text-yellow-500' : 'text-red-500'}`} />
-          }
-          <div>
-            <h2 className="text-xl font-bold tracking-tight mb-1">
-              Forfait {
-                storeData?.subscription_plan === 'pro' ? 'Pro' :
-                storeData?.subscription_plan === 'essential' ? 'Essentiel' :
-                'Gratuit (Démo)'
-              }
-            </h2>
-            <p className={`text-sm font-mono ${status.type === 'danger' ? 'text-red-700' : 'text-art-muted'}`}>
-              {status.msg}
-            </p>
+      {!verifying && (
+        <div className={`p-6 border flex flex-col md:flex-row items-center gap-6 justify-between ${
+          status.type === 'success' ? 'glass border-green-200' :
+          status.type === 'warning' ? 'glass border-yellow-200' :
+          'bg-red-50/50 border-red-200'
+        }`}>
+          <div className="flex items-center gap-4">
+            {status.type === 'success'
+              ? <CheckCircle2 className="w-8 h-8 text-green-500" />
+              : <AlertCircle className={`w-8 h-8 ${status.type === 'warning' ? 'text-yellow-500' : 'text-red-500'}`} />
+            }
+            <div>
+              <h2 className="text-xl font-bold tracking-tight mb-1">
+                Forfait {
+                  storeData?.subscription_plan === 'pro' ? 'Pro' :
+                  storeData?.subscription_plan === 'essential' ? 'Essentiel' :
+                  'Gratuit (Démo)'
+                }
+              </h2>
+              <p className={`text-sm font-mono ${status.type === 'danger' ? 'text-red-700' : 'text-art-muted'}`}>
+                {status.msg}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Plans List */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -320,13 +256,12 @@ export function Billing({ user }: BillingProps) {
             plan={plan}
             isCurrentPlan={storeData?.subscription_plan === plan.id}
             user={user}
-            storeName={storeData?.store_name || ''}
-            onSuccess={handlePaymentSuccess}
+            onPayInit={handlePayInit}
           />
         ))}
       </div>
 
-      {/* Payment History and Reconciliation Section */}
+      {/* Payment History Section */}
       <div className="border-t border-art-border pt-10">
         <div className="flex items-center gap-2 mb-6">
           <History className="w-5 h-5 text-art-text" />
@@ -347,11 +282,10 @@ export function Billing({ user }: BillingProps) {
                 <thead>
                   <tr className="border-b border-art-border bg-art-text/5 text-art-text uppercase font-bold tracking-widest text-[10px]">
                     <th className="p-4">Date</th>
-                    <th className="p-4">Référence (TxRef)</th>
+                    <th className="p-4">Référence / Session ID</th>
                     <th className="p-4">Forfait</th>
                     <th className="p-4">Montant</th>
                     <th className="p-4">Statut</th>
-                    <th className="p-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-art-border/50">
@@ -363,7 +297,9 @@ export function Billing({ user }: BillingProps) {
                           minute: '2-digit'
                         })}
                       </td>
-                      <td className="p-4 font-bold">{payment.tx_ref}</td>
+                      <td className="p-4 font-bold select-all truncate max-w-[200px]" title={payment.tx_ref}>
+                        {payment.tx_ref}
+                      </td>
                       <td className="p-4 uppercase">
                         {payment.plan_id === 'pro' ? 'Pro' : 'Essentiel'}
                       </td>
@@ -377,7 +313,7 @@ export function Billing({ user }: BillingProps) {
                           </span>
                         )}
                         {payment.status === 'pending_verification' && (
-                          <span className="inline-flex items-center gap-1 text-yellow-600 font-bold animate-pulse">
+                          <span className="inline-flex items-center gap-1 text-yellow-600 font-bold">
                             <AlertCircle className="w-3.5 h-3.5" /> En attente de validation
                           </span>
                         )}
@@ -390,22 +326,6 @@ export function Billing({ user }: BillingProps) {
                           <span className="inline-flex items-center gap-1 text-red-600 font-bold">
                             <XCircle className="w-3.5 h-3.5" /> Échoué
                           </span>
-                        )}
-                      </td>
-                      <td className="p-4 text-right">
-                        {payment.status === 'pending_verification' && (
-                          <button
-                            onClick={() => handleVerifyPayment(payment)}
-                            disabled={verifyingId === payment.id}
-                            className="inline-flex items-center gap-1 px-3 py-1 bg-art-text text-white text-[10px] uppercase font-bold tracking-widest active:scale-95 transition-transform disabled:opacity-50"
-                          >
-                            {verifyingId === payment.id ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <RefreshCw className="w-3 h-3" />
-                            )}
-                            Vérifier
-                          </button>
                         )}
                       </td>
                     </tr>

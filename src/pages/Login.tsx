@@ -36,64 +36,7 @@ export default function Login() {
       if (error) throw error;
 
       if (data.user) {
-        const userId = data.user.id;
-        // Update the auto-generated row for this demo user
-        const randomSuffix = Math.floor(Math.random() * 10000);
-        await supabase.from('users').update({
-          store_name: 'Boutique Démo',
-          store_url: `demo-${randomSuffix}`,
-          store_description: 'Bienvenue sur notre boutique de démonstration OmniShop ! Découvrez nos produits premium.',
-          subscription_plan: 'free',
-          categories: ['Nouveautés', 'Premium', 'Accessoires']
-        }).eq('id', userId);
-
-        // Inject 4 beautiful demo products
-        const demoProducts = [
-          {
-            user_id: userId,
-            name: 'Sneakers Premium Urban',
-            price: 45000,
-            image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80',
-            category: 'Nouveautés',
-            description: 'Sneakers élégantes et ultra-confortables conçues pour le style urbain quotidien.',
-            in_stock: true,
-            stock_count: 12
-          },
-          {
-            user_id: userId,
-            name: 'Montre Minimaliste Classic',
-            price: 75000,
-            image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80',
-            category: 'Premium',
-            description: 'Montre avec bracelet en cuir véritable et cadran minimaliste épuré.',
-            in_stock: true,
-            stock_count: 5
-          },
-          {
-            user_id: userId,
-            name: 'Sac à Main Haute Couture',
-            price: 120000,
-            image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=600&q=80',
-            category: 'Premium',
-            description: 'Sac en cuir italien haut de gamme, l\'accessoire parfait pour sublimer vos tenues.',
-            in_stock: true,
-            stock_count: 3
-          },
-          {
-            user_id: userId,
-            name: 'Lunettes de Soleil Vintage',
-            price: 25000,
-            image: 'https://images.unsplash.com/photo-1572635196237-14b3f281503f?auto=format&fit=crop&w=600&q=80',
-            category: 'Accessoires',
-            description: 'Protection UV400 et style rétro intemporel pour toutes les saisons.',
-            in_stock: true,
-            stock_count: 20
-          }
-        ];
-
-        await supabase.from('products').insert(demoProducts);
-        
-        toast.success("Mode Démo activé avec produits exemples !");
+        toast.success("Mode Démo activé ! Lancez votre assistant...");
         navigate('/dashboard');
       }
     } catch (err: any) {
