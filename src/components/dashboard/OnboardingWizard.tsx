@@ -265,13 +265,29 @@ export function OnboardingWizard({ userId, onComplete }: OnboardingWizardProps) 
     try {
       const activeTheme = themes.find(t => t.id === selectedTheme) || themes[0];
       const cleanedWhatsApp = whatsapp.replace(/\s+/g, '');
+      let finalSlug = storeSlug.trim();
+
+      // Vérifier l'unicité du slug avant de sauvegarder
+      const { data: existingSlugs } = await supabase
+        .from('users')
+        .select('id')
+        .eq('store_url', finalSlug)
+        .neq('id', userId);
+
+      if (existingSlugs && existingSlugs.length > 0) {
+        // Le slug est pris, on ajoute un suffixe aléatoire
+        const suffix = Math.random().toString(36).substring(2, 6);
+        finalSlug = `${finalSlug}-${suffix}`;
+        setStoreSlug(finalSlug);
+        toast.warning(`L'URL "${storeSlug.trim()}" était déjà prise. Nous l'avons changée en "${finalSlug}".`);
+      }
 
       // 1. Mettre à jour le profil du marchand
       const { error: userError } = await supabase
         .from('users')
         .update({
           store_name: storeName.trim(),
-          store_url: storeSlug.trim(),
+          store_url: finalSlug,
           whatsapp_number: cleanedWhatsApp,
           theme_color: activeTheme.accent,
           background_color: activeTheme.bg,
@@ -330,13 +346,29 @@ export function OnboardingWizard({ userId, onComplete }: OnboardingWizardProps) 
     try {
       const activeTheme = themes.find(t => t.id === aiResult.themeId) || themes[0];
       const cleanedWhatsApp = whatsapp.replace(/\s+/g, '');
+      let finalSlug = aiResult.storeSlug.trim();
+
+      // Vérifier l'unicité du slug avant de sauvegarder
+      const { data: existingSlugs } = await supabase
+        .from('users')
+        .select('id')
+        .eq('store_url', finalSlug)
+        .neq('id', userId);
+
+      if (existingSlugs && existingSlugs.length > 0) {
+        // Le slug est pris, on ajoute un suffixe aléatoire
+        const suffix = Math.random().toString(36).substring(2, 6);
+        finalSlug = `${finalSlug}-${suffix}`;
+        updateAiResultField('storeSlug', finalSlug);
+        toast.warning(`L'URL "${aiResult.storeSlug.trim()}" était déjà prise. Nous l'avons changée en "${finalSlug}".`);
+      }
 
       // 1. Mettre à jour le profil du marchand
       const { error: userError } = await supabase
         .from('users')
         .update({
           store_name: aiResult.storeName.trim(),
-          store_url: aiResult.storeSlug.trim(),
+          store_url: finalSlug,
           whatsapp_number: cleanedWhatsApp,
           theme_color: activeTheme.accent,
           background_color: activeTheme.bg,
