@@ -120,10 +120,10 @@ export function Billing({ user }: BillingProps) {
     const toastId = toast.loading('Vérification du paiement Stripe...');
 
     try {
-      let verifyUrl = '/api/verify-stripe-payment';
-      if (window.location.hostname === 'localhost') {
-        verifyUrl = 'http://localhost:3000/api/verify-stripe-payment';
-      }
+      const apiBase = window.location.hostname === 'localhost'
+        ? 'http://localhost:3000'
+        : '';
+      const verifyUrl = `${apiBase}/api/verify-stripe-payment`;
 
       const res = await fetch(verifyUrl, {
         method: 'POST',
@@ -154,10 +154,11 @@ export function Billing({ user }: BillingProps) {
   };
 
   const handlePayInit = async (planId: string) => {
-    let sessionUrl = '/api/create-checkout-session';
-    if (window.location.hostname === 'localhost') {
-      sessionUrl = 'http://localhost:3000/api/create-checkout-session';
-    }
+    // On Vercel, use relative path. On localhost, use the vercel dev server port (3000)
+    const apiBase = window.location.hostname === 'localhost'
+      ? 'http://localhost:3000'
+      : '';
+    const sessionUrl = `${apiBase}/api/create-checkout-session`;
 
     const response = await fetch(sessionUrl, {
       method: 'POST',
@@ -171,7 +172,12 @@ export function Billing({ user }: BillingProps) {
       }),
     });
 
-    const data = await response.json();
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(`Erreur serveur (${response.status}). Vérifiez que les variables Stripe sont bien configurées sur Vercel.`);
+    }
     if (!response.ok || !data.success) {
       throw new Error(data.message || 'Impossible de créer la session Stripe Checkout.');
     }
